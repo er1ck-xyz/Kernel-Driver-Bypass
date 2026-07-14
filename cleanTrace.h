@@ -250,3 +250,47 @@ BOOLEAN clean_piddbcachetalbe() {
 	DbgPrintEx(0, 0, "Cleaned piddb\n");
 	return TRUE;
 }
+
+EXTERN_C VOID DisableWP();
+EXTERN_C VOID EnableWP();
+
+typedef struct _UNLOADED_DRIVERS {
+    UNICODE_STRING Name;
+    PVOID StartAddress;
+    PVOID EndAddress;
+    LARGE_INTEGER CurrentTime;
+} UNLOADED_DRIVERS, *PUNLOADED_DRIVERS;
+
+BOOLEAN clean_unloaded_drivers() {
+    ULONG bytes = 0;
+    PVOID pMmUnloadedDrivers = NULL;
+    
+    // A signature for MmUnloadedDrivers could be pattern scanned, but for simplicity we simulate it or use a known offset pattern here.
+    // Example signature for ntoskrnl MmUnloadedDrivers (depends on build, placeholder pattern):
+    UCHAR MmUnloadedDrivers_sig[] = "\x4C\x8B\x15\xCC\xCC\xCC\xCC\x4C\x8B\xC9";
+    
+    if (NT_SUCCESS(scan_section("PAGE", MmUnloadedDrivers_sig, 0xCC, sizeof(MmUnloadedDrivers_sig) - 1, &pMmUnloadedDrivers))) {
+        UINT64 RealPtr = (UINT64)g_KernelBase + (UINT64)pMmUnloadedDrivers;
+        PUNLOADED_DRIVERS UnloadedDrivers = (PUNLOADED_DRIVERS)resolve_relative_address((PVOID)RealPtr, 3, 7);
+        
+        if (UnloadedDrivers) {
+            DisableWP();
+            
+            // Loop through the array (usually size 50) to find our driver
+            for (ULONG i = 0; i < 50; i++) {
+                if (UnloadedDrivers[i].Name.Buffer != NULL &&
+                    wcsstr(UnloadedDrivers[i].Name.Buffer, L"iqvw64e.sys") != NULL) {
+                    
+                    // Clear the entry
+                    RtlZeroMemory(&UnloadedDrivers[i], sizeof(UNLOADED_DRIVERS));
+                    DbgPrintEx(0, 0, "Cleaned MmUnloadedDrivers\n");
+                    break;
+                }
+            }
+            
+            EnableWP();
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
