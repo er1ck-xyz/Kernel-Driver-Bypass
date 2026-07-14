@@ -257,6 +257,7 @@ void real_entry()
 	DbgPrintEx(0, 0, "Real Entry Called.");
 
 	clean_piddbcachetalbe();
+	clean_unloaded_drivers();
 
 	InitializeObjectAttributes(&obj_att, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
 	NTSTATUS status = PsCreateSystemThread(&thread, THREAD_ALL_ACCESS, &obj_att, NULL, NULL, create_memeory_thread, NULL);
