@@ -17,6 +17,9 @@ static NTSTATUS HkpReplaceCode16Bytes(
 	_In_ PUCHAR	Replacement
 )
 {
+	if (Address == NULL || Replacement == NULL)
+		return STATUS_INVALID_PARAMETER;
+
 	//
 	// Verifica o alinhamento adequado. cmpxchg16b funciona apenas com endereços alinhados a 16 bytes.
 	//
@@ -112,6 +115,9 @@ static VOID HkpPlaceDetour(
 	_In_ PVOID Destination
 )
 {
+	if (Address == NULL || Destination == NULL)
+		return;
+
 	//
 	// Salva a instrução de pulo (jump) e o destino do desvio (detour).
 	// Isso criará o código como mostrado abaixo:
