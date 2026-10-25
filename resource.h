@@ -20,6 +20,9 @@ PACL	Dacl2;
 HANDLE	g_Section2 = NULL;
 PVOID   shared_section_esp = NULL;
 
+// Sincronização para evitar race condition na shared memory (anti-BSOD)
+EX_PUSH_LOCK g_SharedLock = { 0 };
+
 
 NTSTATUS create_shared_memory()
 {

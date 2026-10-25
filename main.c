@@ -29,29 +29,53 @@ PVOID hooked_entry(uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintp
 		return NULL;
 	}
 
+	ExAcquirePushLockExclusive(&g_SharedLock);
 	if (!shared_section_esp)
+	{
+		ExReleasePushLockExclusive(&g_SharedLock);
 		return original_entry(a1, a2, a3, a4, a5);
+	}
 
 	copy_memory* m = (copy_memory*)shared_section_esp;
 	if (!m)
+	{
+		ExReleasePushLockExclusive(&g_SharedLock);
 		return original_entry(a1, a2, a3, a4, a5);
+	}
 
 	if (!m->called)
+	{
+		ExReleasePushLockExclusive(&g_SharedLock);
 		return original_entry(a1, a2, a3, a4, a5);
+	}
 
 	if (m->read != FALSE)
 	{
-		read_kernel_memory(process, m->address, m->output, m->size);
+		if (process)
+			read_kernel_memory(process, m->address, m->output, m->size);
 	}
 	else if (m->read_string != FALSE)
 	{
+		if (!process)
+		{
+			ExReleasePushLockExclusive(&g_SharedLock);
+			return original_entry(a1, a2, a3, a4, a5);
+		}
+
 		PVOID kernelBuffer = ExAllocatePool(NonPagedPool, m->size);
 
 		if (!kernelBuffer)
+		{
+			ExReleasePushLockExclusive(&g_SharedLock);
 			return original_entry(a1, a2, a3, a4, a5);
+		}
 
 		if (!memcpy(kernelBuffer, m->buffer_address, m->size))
+		{
+			ExFreePool(kernelBuffer);
+			ExReleasePushLockExclusive(&g_SharedLock);
 			return original_entry(a1, a2, a3, a4, a5);
+		}
 
 		read_kernel_memory(process, m->address, kernelBuffer, m->size);
 
@@ -60,6 +84,7 @@ PVOID hooked_entry(uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintp
 		if (!memcpy(m->buffer_address, kernelBuffer, m->size))
 		{
 			ExFreePool(kernelBuffer);
+			ExReleasePushLockExclusive(&g_SharedLock);
 			return original_entry(a1, a2, a3, a4, a5);
 		}
 		ExFreePool(kernelBuffer);
@@ -72,6 +97,7 @@ PVOID hooked_entry(uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintp
 			ZwClose(g_Section2);
 	}
 
+	ExReleasePushLockExclusive(&g_SharedLock);
 	return original_entry(a1, a2, a3, a4, a5);
 }
 
@@ -87,36 +113,33 @@ char hooked_event(PVOID a1)
 	if (!NT_SUCCESS(read_shared_memory()))
 		return "";
 
+	ExAcquirePushLockExclusive(&g_SharedLock);
 	if (!shared_section)
+	{
+		ExReleasePushLockExclusive(&g_SharedLock);
 		return "";
+	}
 
 	copy_memory* m = (copy_memory*)shared_section;
 	if (!m)
+	{
+		ExReleasePushLockExclusive(&g_SharedLock);
 		return "";
+	}
 
 	if (!m->called)
 	{
-		//if (!NT_SUCCESS(read_shared_memory_esp()))
-		//	return "";
-
-		//if (!shared_section_esp)
-		//	return "";
-
-		//m = (copy_memory*)shared_section_esp;
-		//if (!m)
-		//	return "";
-
-		//if (!m->called)
-		//{
-		//	DbgPrintEx(0, 0, "Returning...");
+		ExReleasePushLockExclusive(&g_SharedLock);
 		return "";
-		//}
 	}
 
 	if (m->get_pid != FALSE)
 		GetPid(&pid, m->process_name);
 	else if (m->change_protection != FALSE)
-		protect_virtual_memory(process, (PVOID)m->address, m->size, m->protection, m->protection_old);
+	{
+		if (process)
+			protect_virtual_memory(process, (PVOID)m->address, m->size, m->protection, m->protection_old);
+	}
 	else if (m->get_base != FALSE)
 	{
 		ANSI_STRING AS;
@@ -126,6 +149,13 @@ char hooked_event(PVOID a1)
 		RtlAnsiStringToUnicodeString(&ModuleNAme, &AS, TRUE);
 
 		PsLookupProcessByProcessId((HANDLE)pid, &process);
+		if (!process)
+		{
+			RtlFreeUnicodeString(&ModuleNAme);
+			ExReleasePushLockExclusive(&g_SharedLock);
+			return "";
+		}
+
 		if (!base_addy)
 		{
 			base_addy = get_module_base_x64(process, ModuleNAme);
@@ -143,64 +173,91 @@ char hooked_event(PVOID a1)
 
 		if (memcpy(shared_section, m, sizeof(copy_memory)) == 0)
 			DbgPrintEx(0, 0, "Sending copy_memory back failed\n");
-
-		//static DWORD old;
-		//if (!old)
-		//{
-		//	protect_virtual_memory(pid, base_addy + 0x5AE06F0, sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &old);
-		//}
 	}
 	else if (m->write != FALSE)
 	{
-		PVOID kernelBuff = ExAllocatePool(NonPagedPool, m->size);
+		if (process)
+		{
+			PVOID kernelBuff = ExAllocatePool(NonPagedPool, m->size);
 
-		if (!kernelBuff)
-			return "";
+			if (!kernelBuff)
+			{
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		if (!memcpy(kernelBuff, m->buffer_address, m->size))
-			return "";
+			if (!memcpy(kernelBuff, m->buffer_address, m->size))
+			{
+				ExFreePool(kernelBuff);
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		write_kernel_memory(process, m->address, kernelBuff, m->size);
-		ExFreePool(kernelBuff);
+			write_kernel_memory(process, m->address, kernelBuff, m->size);
+			ExFreePool(kernelBuff);
+		}
 	}
 	else if (m->read != FALSE)
 	{
-		read_kernel_memory(process, m->address, m->output, m->size);
+		if (process)
+			read_kernel_memory(process, m->address, m->output, m->size);
 	}
 	else if (m->read_string != FALSE)
 	{
-		PVOID kernelBuffer = ExAllocatePool(NonPagedPool, m->size);
+		if (process)
+		{
+			PVOID kernelBuffer = ExAllocatePool(NonPagedPool, m->size);
 
-		if (!kernelBuffer)
-			return "";
+			if (!kernelBuffer)
+			{
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		if (!memcpy(kernelBuffer, m->buffer_address, m->size))
-			return "";
+			if (!memcpy(kernelBuffer, m->buffer_address, m->size))
+			{
+				ExFreePool(kernelBuffer);
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		read_kernel_memory(process, m->address, kernelBuffer, m->size);
+			read_kernel_memory(process, m->address, kernelBuffer, m->size);
 
-		RtlZeroMemory(m->buffer_address, m->size);
+			RtlZeroMemory(m->buffer_address, m->size);
 
-		if (!memcpy(m->buffer_address, kernelBuffer, m->size))
-			return "";
+			if (!memcpy(m->buffer_address, kernelBuffer, m->size))
+			{
+				ExFreePool(kernelBuffer);
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		DbgPrintEx(0, 0, "String read: %s", (const char*)kernelBuffer);
-
-		ExFreePool(kernelBuffer);
+			ExFreePool(kernelBuffer);
+		}
 	}
 	else if (m->write_string != FALSE)
 	{
-		PVOID kernelBuffer1 = ExAllocatePool(NonPagedPool, m->size);
+		if (process)
+		{
+			PVOID kernelBuffer1 = ExAllocatePool(NonPagedPool, m->size);
 
-		if (!kernelBuffer1)
-			return "";
+			if (!kernelBuffer1)
+			{
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		if (!memcpy(kernelBuffer1, m->buffer_address, m->size))
-			return "";
+			if (!memcpy(kernelBuffer1, m->buffer_address, m->size))
+			{
+				ExFreePool(kernelBuffer1);
+				ExReleasePushLockExclusive(&g_SharedLock);
+				return "";
+			}
 
-		write_kernel_memory(process, m->address, kernelBuffer1, m->size);
+			write_kernel_memory(process, m->address, kernelBuffer1, m->size);
 
-		ExFreePool(kernelBuffer1);
+			ExFreePool(kernelBuffer1);
+		}
 	}
 	else if (m->alloc_memory != FALSE)
 	{
@@ -228,6 +285,7 @@ char hooked_event(PVOID a1)
 			ZwClose(g_Section2);
 	}
 
+	ExReleasePushLockExclusive(&g_SharedLock);
 	return "";
 }
 
@@ -267,8 +325,17 @@ void real_entry()
 		return status;
 	}
 
-	HkDetourFunction(get_system_module_export("\\SystemRoot\\System32\\drivers\\watchdog.sys", "WdLogEvent5_WdError"), (PVOID)hooked_event, 16, (PVOID*)&original_event);
-	//HkDetourFunction(get_system_module_export("\\SystemRoot\\System32\\drivers\\watchdog.sys", "WdLogNewEntry5_WdError"), (PVOID)hooked_entry, 17, (PVOID*)&original_entry);
+	PVOID watchdog_export = get_system_module_export("\\SystemRoot\\System32\\drivers\\watchdog.sys", "WdLogEvent5_WdError");
+	if (watchdog_export)
+	{
+		NTSTATUS hook_status = HkDetourFunction(watchdog_export, (PVOID)hooked_event, 16, (PVOID*)&original_event);
+		if (!NT_SUCCESS(hook_status))
+			DbgPrintEx(0, 0, "Failed to hook WdLogEvent5_WdError: %p\n", hook_status);
+	}
+	else
+	{
+		DbgPrintEx(0, 0, "WdLogEvent5_WdError export not found\n");
+	}
 
 	DbgPrintEx(0, 0, "Hooks applied!");
 	ZwClose(thread);
